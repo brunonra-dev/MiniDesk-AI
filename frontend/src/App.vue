@@ -4,8 +4,8 @@ import { onMounted, ref } from 'vue'
 interface Ticket {
   id: number
   description: string
-  category: string | null
-  priority: string | null
+  category: 'soporte' | 'administracion' | 'otros' | null
+  priority: 'alta' | 'media' | 'baja' | null
   summary: string | null
 }
 
@@ -16,6 +16,8 @@ const loading = ref(true)
 const submitting = ref(false)
 const loadError = ref('')
 const submitError = ref('')
+const analyzingId = ref<number | null>(null)
+const analysisErrors = ref<Record<number, string>>({})
 
 async function loadTickets() {
   try {
@@ -49,6 +51,38 @@ async function createTicket() {
     submitError.value = 'No se pudo confirmar la creación. Comprobá la conexión y recargá la lista antes de reintentar.'
   } finally {
     submitting.value = false
+  }
+}
+
+async function analyzeTicket(ticket: Ticket) {
+  if (analyzingId.value !== null) return
+
+  analyzingId.value = ticket.id
+  delete analysisErrors.value[ticket.id]
+  try {
+    const response = await fetch(`${ticketsUrl}/${ticket.id}/analyze`, {
+      method: 'POST',
+    })
+    if (!response.ok) {
+      const body: unknown = await response.json().catch(() => null)
+      const detail = typeof body === 'object' && body !== null && 'detail' in body
+        && typeof body.detail === 'string'
+        ? body.detail
+        : 'No se pudo analizar la solicitud.'
+      throw new Error(detail)
+    }
+    const analyzedTicket: Ticket = await response.json()
+    tickets.value = tickets.value.map((item) =>
+      item.id === analyzedTicket.id ? analyzedTicket : item,
+    )
+  } catch (error) {
+    analysisErrors.value[ticket.id] = error instanceof TypeError
+      ? 'No se pudo conectar con el backend para analizarla.'
+      : error instanceof Error
+        ? error.message
+        : 'No se pudo analizar la solicitud.'
+  } finally {
+    analyzingId.value = null
   }
 }
 
@@ -94,6 +128,22 @@ onMounted(loadTickets)
         <li v-for="ticket in tickets" :key="ticket.id">
           <span class="ticket-id">Solicitud #{{ ticket.id }}</span>
           <p class="description">{{ ticket.description }}</p>
+          <button
+            type="button"
+            :disabled="analyzingId !== null"
+            @click="analyzeTicket(ticket)"
+          >
+            {{ analyzingId === ticket.id ? 'Analizando…' : 'Analizar' }}
+          </button>
+          <div v-if="ticket.category && ticket.priority && ticket.summary" class="analysis">
+            <p><strong>Categoría:</strong> {{ ticket.category }}</p>
+            <p><strong>Prioridad:</strong> {{ ticket.priority }}</p>
+            <p><strong>Resumen:</strong> {{ ticket.summary }}</p>
+          </div>
+          <p v-else class="analysis-pending">Sin analizar</p>
+          <p v-if="analysisErrors[ticket.id]" role="alert" class="error">
+            {{ analysisErrors[ticket.id] }} La solicitud guardada se conserva.
+          </p>
         </li>
       </ul>
     </section>
@@ -130,5 +180,8 @@ ul { margin: 0; padding: 0; list-style: none; }
 li + li { margin-top: 16px; padding-top: 16px; border-top: 1px solid #d4deea; }
 .ticket-id { color: #52657d; font-family: Consolas, monospace; font-size: 0.85rem; }
 .description { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.analysis { margin-top: 16px; padding: 12px; background: #f3f6fa; border-radius: 4px; }
+.analysis p { margin: 4px 0; }
+.analysis-pending { margin: 16px 0 0; color: #52657d; }
 .error { color: #a12c2c; }
 </style>

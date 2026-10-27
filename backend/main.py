@@ -57,6 +57,23 @@ def list_tickets():
     return database.list_tickets()
 
 
+@app.post("/tickets/{ticket_id}/analyze", response_model=Ticket)
+def analyze_ticket(ticket_id: int):
+    ticket = database.get_ticket(ticket_id)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail="No se encontró la solicitud.")
+    try:
+        analysis = gemini.analyze_description(ticket["description"])
+    except gemini.GeminiError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from None
+    updated = database.update_analysis(
+        ticket_id, analysis.category, analysis.priority, analysis.summary
+    )
+    if updated is None:
+        raise HTTPException(status_code=404, detail="No se encontró la solicitud.")
+    return updated
+
+
 @app.post("/gemini/test", response_model=GeminiTestResult)
 def test_gemini():
     try:

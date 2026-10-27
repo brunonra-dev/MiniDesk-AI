@@ -42,6 +42,31 @@ def list_tickets() -> list[dict]:
         return [dict(row) for row in rows]
 
 
+def get_ticket(ticket_id: int) -> dict | None:
+    with closing(sqlite3.connect(DB_PATH)) as connection:
+        connection.row_factory = sqlite3.Row
+        ticket = connection.execute(
+            "SELECT id, description, category, priority, summary FROM tickets WHERE id = ?",
+            (ticket_id,),
+        ).fetchone()
+        return dict(ticket) if ticket is not None else None
+
+
+def update_analysis(ticket_id: int, category: str, priority: str, summary: str) -> dict | None:
+    with closing(sqlite3.connect(DB_PATH)) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute(
+            "UPDATE tickets SET category = ?, priority = ?, summary = ? WHERE id = ?",
+            (category, priority, summary, ticket_id),
+        )
+        ticket = connection.execute(
+            "SELECT id, description, category, priority, summary FROM tickets WHERE id = ?",
+            (ticket_id,),
+        ).fetchone()
+        connection.commit()
+        return dict(ticket) if ticket is not None else None
+
+
 if __name__ == "__main__":
     init_db()
     print(f"Base inicializada: {DB_PATH}")

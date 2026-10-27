@@ -1,6 +1,6 @@
 # MiniDesk AI
 
-Proyecto de aprendizaje: escribir solicitudes, analizarlas con IA y guardarlas en SQLite. La etapa 1 preparó Vue y `GET /health`; la etapa 2 agregó SQLite; la etapa 3 agregó los endpoints de tickets; la etapa 4 conectó Vue con `fetch`. La etapa 5 agrega una prueba aislada de Gemini, todavía sin analizar solicitudes.
+Proyecto de aprendizaje: escribir solicitudes, analizarlas con IA y guardarlas en SQLite. La etapa 1 preparó Vue y `GET /health`; la etapa 2 agregó SQLite; la etapa 3 agregó los endpoints de tickets; la etapa 4 conectó Vue con `fetch`; la etapa 5 probó Gemini. La etapa 6 permite analizar tickets guardados y mostrar los resultados en Vue.
 
 ## Carpetas y archivos
 
@@ -419,6 +419,31 @@ Archivos nuevos: `backend/gemini.py` para la llamada HTTP, `.env.example` como p
 
 Se configuró `gemini-3.5-flash-lite` según la cuota disponible que mostraste. Una llamada real, ejecutada directamente mediante `main.test_gemini()`, devolvió `Mensaje recibido.` sin mostrar la clave ni modificar tickets. La prueba real desde `/docs` sigue pendiente: el servidor existente del puerto 8000 no respondió tampoco a `/health`. La guía detalla esa limitación y el comando para iniciarlo. Las operaciones de tickets y la pantalla Vue no cambian.
 
-**Pregunta conceptual:** ¿por qué la clave se agrega en FastAPI y no en el `fetch` que ejecuta Vue?
+## Etapa 6: analizar tickets con Gemini
+
+`POST /tickets/{ticket_id}/analyze` lee la descripción desde SQLite, pide JSON estructurado a Gemini, valida categoría, prioridad y resumen, y actualiza únicamente esos tres campos. Vue muestra un botón **Analizar** y los resultados. Si la llamada o la validación fallan, se conserva la solicitud y cualquier análisis anterior.
+
+La [guía de análisis](backend/ANALYSIS.md) explica el prompt, los valores permitidos, el recorrido del dato, las pruebas manuales y los resultados de verificación. Pasaron 16 pruebas y la compilación de Vue. Una prueba HTTP real con Gemini confirmó el guardado del análisis sin cambiar la descripción. La comprobación visual del navegador quedó pendiente por fallos de la herramienta.
+
+### Tickets de ejemplo para probar el análisis
+
+`backend/seed.py` contiene seis solicitudes ficticias: acceso al correo, impresora, configuración de firma, pago de factura, reintegro de gastos e intercambio de libros. Incluyen distintas urgencias para probar las categorías y prioridades de Gemini.
+
+Desde la raíz del proyecto:
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe seed.py
+```
+
+El script crea la tabla si hace falta e inserta las descripciones en `backend/minidesk.db`. Categoría, prioridad y resumen quedan en `NULL`: los completa Gemini cuando pulses **Analizar** en Vue. La carga de ejemplos no llama a la API ni necesita la clave.
+
+Podés repetir el comando: `WHERE NOT EXISTS` comprueba cada descripción y evita volver a insertar ejemplos que ya estén. `executemany()` ejecuta la consulta parametrizada para las seis descripciones y `commit()` confirma la carga. No borra tickets ni reinicia análisis existentes. La coincidencia es por descripción exacta; no hay un identificador especial para los ejemplos.
+
+Recargá `http://localhost:5173` para verlos y probá **Analizar** en uno. Esa acción sí consume cuota de Gemini. Las categorías y prioridades no están precargadas ni se consideran respuestas esperadas fijas: las genera el modelo.
+
+`backend/test_seed.py` verifica con una base temporal que repetir la carga no duplica filas ni altera solicitudes o análisis anteriores. Se ejecutó esa prueba y pasó. También se ejecutó el script en la base local: agregó seis ejemplos, y una consulta de solo lectura confirmó que los seis quedaron sin analizar.
+
+**Pregunta conceptual:** ¿por qué los ejemplos se guardan sin categoría, prioridad ni resumen antes de probar el análisis?
 
 La etapa termina acá. Una respuesta a la pregunta no inicia la siguiente; para eso tenés que escribir **CONTINUAR**.
