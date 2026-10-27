@@ -19,6 +19,29 @@ def init_db() -> None:
         connection.commit()
 
 
+def create_ticket(description: str) -> dict:
+    with closing(sqlite3.connect(DB_PATH)) as connection:
+        connection.row_factory = sqlite3.Row
+        cursor = connection.execute(
+            "INSERT INTO tickets (description) VALUES (?)", (description,)
+        )
+        ticket = connection.execute(
+            "SELECT id, description, category, priority, summary FROM tickets WHERE id = ?",
+            (cursor.lastrowid,),
+        ).fetchone()
+        connection.commit()
+        return dict(ticket)
+
+
+def list_tickets() -> list[dict]:
+    with closing(sqlite3.connect(DB_PATH)) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            "SELECT id, description, category, priority, summary FROM tickets ORDER BY id"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
 if __name__ == "__main__":
     init_db()
     print(f"Base inicializada: {DB_PATH}")

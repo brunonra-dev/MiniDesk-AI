@@ -1,6 +1,6 @@
 # MiniDesk AI
 
-Proyecto de aprendizaje: escribir solicitudes, analizarlas con IA y guardarlas en SQLite. La etapa 1 preparó Vue y `GET /health`. La etapa 2 agrega la base SQLite y la tabla `tickets`.
+Proyecto de aprendizaje: escribir solicitudes, analizarlas con IA y guardarlas en SQLite. La etapa 1 preparó Vue y `GET /health`; la etapa 2 agregó SQLite. La etapa 3 permite crear y listar tickets mediante HTTP.
 
 ## Carpetas y archivos
 
@@ -8,7 +8,7 @@ Proyecto de aprendizaje: escribir solicitudes, analizarlas con IA y guardarlas e
 - `frontend/src/`: código de la interfaz. `main.ts` crea la aplicación Vue y la monta en el elemento `#app` de `index.html`. `App.vue` contiene la pantalla inicial.
 - `frontend/node_modules/`: dependencias descargadas por npm; no se guarda en Git.
 - `frontend/dist/`: archivos generados por `npm.cmd run build`; tampoco se guardan en Git.
-- `backend/`: código Python. `main.py` define la API, `database.py` inicializa SQLite y `requirements.txt` declara FastAPI y uvicorn. `test_database.py` verifica la base con `unittest`, incluido en Python.
+- `backend/`: código Python. `main.py` define la API y los modelos Pydantic; `database.py` inicializa SQLite, guarda y lista tickets. `requirements.txt` declara FastAPI y uvicorn. `test_database.py` y `test_tickets.py` verifican la base y la validación con `unittest`, incluido en Python.
 - `backend/minidesk.db`: archivo de la base SQLite, generado localmente y excluido de Git junto con sus archivos auxiliares.
 - `backend/.venv/`: entorno virtual que se crea al instalar el backend. Aísla sus paquetes de otros proyectos, de forma parecida a tener dependencias locales en `node_modules`.
 - `backend/__pycache__/`: caché que Python puede generar al importar módulos; se excluye de Git.
@@ -201,10 +201,119 @@ La prueba usa una base temporal: comprueba la estructura, el identificador gener
 - `git diff --check` pasó. Git ignora la base, los archivos auxiliares y el entorno virtual.
 - No se repitieron pruebas del frontend porque esta etapa no lo modifica.
 
+## Etapa 3: crear y listar tickets por HTTP
+
+### Métodos HTTP y códigos de respuesta
+
+`GET /tickets` consulta los tickets guardados. No agrega filas y devuelve HTTP `200 OK` con un array JSON; si no hay tickets devuelve `[]`.
+
+`POST /tickets` crea un ticket a partir del cuerpo JSON de la petición. Devuelve HTTP `201 Created` y el ticket guardado. Repetir un POST válido crea otra fila; repetir un GET solo vuelve a consultar.
+
+`GET /health` sigue disponible. Esta etapa no agrega otros métodos HTTP.
+
+### JSON y validación con Pydantic
+
+La entrada de `POST /tickets` es:
+
+```json
+{"description": "No puedo acceder al correo"}
+```
+
+En `backend/main.py`, `TicketCreate` hereda de `BaseModel`, de Pydantic. Una clase agrupa datos y comportamiento; en Python, `class TicketCreate(BaseModel)` expresa herencia. El modelo define el contrato de entrada:
+
+```python
+class TicketCreate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    description: str = Field(min_length=1, max_length=5000)
+```
+
+`description` es obligatorio y debe ser texto. Se quitan los espacios de los extremos antes de comprobar la longitud: una descripción con solo espacios se rechaza. El texto resultante debe tener entre 1 y 5000 caracteres. `extra="forbid"` rechaza campos que no declaramos, como un `id` enviado por el cliente.
+
+Se parece a definir un tipo de TypeScript, con una diferencia: Pydantic comprueba los datos durante la ejecución. Un tipo o interfaz de TypeScript por sí solo no valida el JSON que llega por la red. `Field` declara restricciones; no es una columna SQL. Ver [campos de modelos en FastAPI](https://fastapi.tiangolo.com/tutorial/body-fields/).
+
+En la ruta, `ticket: TicketCreate` le indica a FastAPI que lea el cuerpo JSON y lo valide con ese modelo. Si falla, responde `422` con detalles del campo y no ejecuta la función que guarda el ticket.
+
+```python
+@app.post("/tickets", response_model=Ticket, status_code=201)
+def create_ticket(ticket: TicketCreate):
+    return database.create_ticket(ticket.description)
+```
+
+El modelo `Ticket` define la salida: `id`, `description`, `category`, `priority` y `summary`. Los últimos tres permiten `None` en Python, que se convierte en `null` en JSON. Todavía no hay análisis de IA. `response_model` también permite documentar y validar la forma de la respuesta.
+
+### Cómo se guarda y se vuelve a leer
+
+1. `/docs` o cualquier cliente envía un POST con `Content-Type: application/json` y el texto JSON en el cuerpo HTTP.
+2. Uvicorn recibe la conexión. FastAPI interpreta el JSON y Pydantic construye `TicketCreate` si es válido.
+3. La función de la ruta pasa `ticket.description` a `database.create_ticket()`.
+4. Esa función abre una conexión SQLite y ejecuta el `INSERT` parametrizado. SQLite genera el `id`; las columnas no enviadas quedan en `NULL`.
+5. Con `cursor.lastrowid`, obtiene el identificador generado y consulta esa fila. `commit()` confirma la escritura y la conexión se cierra al salir del bloque.
+6. El diccionario Python pasa por el modelo de salida `Ticket` y FastAPI lo convierte en JSON con estado `201`.
+
+La inserción en `backend/database.py` usa:
+
+```python
+cursor = connection.execute(
+    "INSERT INTO tickets (description) VALUES (?)", (description,)
+)
+```
+
+`?` marca el lugar de un valor. El valor se envía aparte, en una tupla Python; la coma de `(description,)` crea una tupla de un elemento. No se arma SQL concatenando el texto del usuario. Así una comilla o un texto como `'); DROP TABLE tickets; --` se trata como datos, sin ejecutarse como SQL. La búsqueda por el identificador también usa `WHERE id = ?`. Ver [parámetros de sqlite3](https://docs.python.org/3/library/sqlite3.html).
+
+Para listar, `database.list_tickets()` ejecuta un `SELECT` con `ORDER BY id`, del identificador menor al mayor. Esta consulta es fija y no recibe valores externos, por eso no necesita parámetros. `sqlite3.Row` permite acceder a cada columna por su nombre y `dict(row)` convierte cada fila en un diccionario. FastAPI devuelve la lista como un array JSON.
+
+### Probar desde /docs
+
+Desde la raíz del proyecto:
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Abrí `http://127.0.0.1:8000/docs` y seguí estos pasos:
+
+1. Desplegá **GET /tickets**, pulsá **Try it out** y **Execute**. Debe responder `200`; si no hay datos, verás `[]`.
+2. Desplegá **POST /tickets**, pulsá **Try it out** y reemplazá el cuerpo por `{"description": "No puedo acceder al correo"}`. Pulsá **Execute**.
+3. Debe responder `201` con esta forma; el `id` depende de los datos que ya tengas:
+
+```json
+{
+  "id": 1,
+  "description": "No puedo acceder al correo",
+  "category": null,
+  "priority": null,
+  "summary": null
+}
+```
+
+4. Ejecutá **GET /tickets** otra vez: el ticket debe aparecer en el array.
+5. Probá POST con `{"description": "   "}` o `{}`: debe responder `422`. Repetí GET para comprobar que esas peticiones inválidas no agregaron filas.
+6. Detené el servidor con `Ctrl+C`, volvé a iniciarlo y ejecutá GET: el ticket debe seguir guardado en `backend/minidesk.db`.
+
+Estas pruebas manuales sí crean tickets en tu base local cuando enviás un POST válido. No hay un endpoint de borrado en esta etapa.
+
+Para repetir las pruebas automáticas, desde `backend/`:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -v
+```
+
+### Verificaciones realizadas en la etapa 3
+
+- `python -m unittest discover -v`: cuatro pruebas pasaron, incluyendo persistencia, estructura de tabla, validación y texto similar a una inyección SQL.
+- Con uvicorn y una base temporal, `POST /tickets` respondió `201` y `GET /tickets` respondió `200`. Se comprobó el listado vacío y luego el orden de dos tickets.
+- Siete cuerpos inválidos devolvieron `422` sin agregar filas: campo ausente, nulo, numérico, vacío, solo espacios, demasiado largo y con un campo extra.
+- Se verificó el recorte de espacios, los tres campos de análisis en `null` y el almacenamiento literal de texto similar a SQL.
+- Tras reiniciar el servidor de prueba, ambos tickets seguían guardados en la base temporal. `/health` respondió `200`.
+- `/docs` y `/openapi.json` respondieron `200`; el esquema incluía ambos métodos de `/tickets`. No se hizo la interacción visual de botones en un navegador; los pasos manuales están indicados arriba.
+- La revisión del código no encontró problemas. `git diff --check` pasó.
+- Las verificaciones no insertaron datos en `backend/minidesk.db`. No se repitieron pruebas del frontend porque no se modificó.
+
 ### Límite de esta etapa
 
-Solo agregamos la inicialización y la consulta manual de la base. La API sigue teniendo únicamente el endpoint propio `GET /health`. Guardar solicitudes desde HTTP, usar Gemini y conectar Vue quedan para otras etapas.
+Se agregan solamente creación y listado por API, validación y SQL parametrizado. Gemini y la conexión del frontend siguen pendientes.
 
-**Pregunta conceptual:** ¿qué diferencia hay entre crear el archivo `minidesk.db` y ejecutar `CREATE TABLE tickets`?
+**Pregunta conceptual:** ¿por qué enviamos la descripción aparte del SQL, en lugar de concatenarla dentro del `INSERT`?
 
 La etapa termina acá. Una respuesta a la pregunta no inicia la siguiente; para eso tenés que escribir **CONTINUAR**.
