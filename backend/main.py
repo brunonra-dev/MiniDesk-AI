@@ -1,10 +1,11 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 
 import database
+import gemini
 
 
 class TicketCreate(BaseModel):
@@ -19,6 +20,11 @@ class Ticket(BaseModel):
     category: str | None
     priority: str | None
     summary: str | None
+
+
+class GeminiTestResult(BaseModel):
+    model: str
+    text: str
 
 
 @asynccontextmanager
@@ -49,3 +55,11 @@ def create_ticket(ticket: TicketCreate):
 @app.get("/tickets", response_model=list[Ticket])
 def list_tickets():
     return database.list_tickets()
+
+
+@app.post("/gemini/test", response_model=GeminiTestResult)
+def test_gemini():
+    try:
+        return gemini.test_connection()
+    except gemini.GeminiError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from None

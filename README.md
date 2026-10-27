@@ -1,6 +1,6 @@
 # MiniDesk AI
 
-Proyecto de aprendizaje: escribir solicitudes, analizarlas con IA y guardarlas en SQLite. La etapa 1 preparó Vue y `GET /health`; la etapa 2 agregó SQLite; la etapa 3 agregó los endpoints de tickets. La etapa 4 conecta el formulario y la lista de Vue con esa API mediante `fetch`.
+Proyecto de aprendizaje: escribir solicitudes, analizarlas con IA y guardarlas en SQLite. La etapa 1 preparó Vue y `GET /health`; la etapa 2 agregó SQLite; la etapa 3 agregó los endpoints de tickets; la etapa 4 conectó Vue con `fetch`. La etapa 5 agrega una prueba aislada de Gemini, todavía sin analizar solicitudes.
 
 ## Carpetas y archivos
 
@@ -411,6 +411,14 @@ Las solicitudes que crees manualmente quedan en tu base local.
 
 Solo agregamos el formulario, el listado conectado con `fetch` y CORS local. No se integró Gemini ni se agregaron dependencias.
 
-**Pregunta conceptual:** ¿por qué una solicitud sigue apareciendo al recargar la página, aunque el estado de Vue se haya reiniciado?
+## Etapa 5: prueba mínima de Gemini
+
+La [guía de configuración y prueba](backend/GEMINI_SETUP.md) explica cómo conseguir la clave sin compartirla, elegir el modelo gratuito de tu proyecto, completar `backend/.env` y probar `POST /gemini/test` desde `/docs`. Incluye el recorrido HTTP, la autenticación, el resultado y los errores comunes.
+
+Archivos nuevos: `backend/gemini.py` para la llamada HTTP, `.env.example` como plantilla pública y `.env` como configuración privada ignorada por Git. `backend/test_gemini.py` prueba la integración con respuestas simuladas. `main.py` agrega el endpoint aislado y `requirements.txt` agrega `python-dotenv`.
+
+Se configuró `gemini-3.5-flash-lite` según la cuota disponible que mostraste. Una llamada real, ejecutada directamente mediante `main.test_gemini()`, devolvió `Mensaje recibido.` sin mostrar la clave ni modificar tickets. La prueba real desde `/docs` sigue pendiente: el servidor existente del puerto 8000 no respondió tampoco a `/health`. La guía detalla esa limitación y el comando para iniciarlo. Las operaciones de tickets y la pantalla Vue no cambian.
+
+**Pregunta conceptual:** ¿por qué la clave se agrega en FastAPI y no en el `fetch` que ejecuta Vue?
 
 La etapa termina acá. Una respuesta a la pregunta no inicia la siguiente; para eso tenés que escribir **CONTINUAR**.
