@@ -1,11 +1,11 @@
 # MiniDesk AI
 
-Proyecto de aprendizaje: escribir solicitudes, analizarlas con IA y guardarlas en SQLite. La etapa 1 preparó Vue y `GET /health`; la etapa 2 agregó SQLite. La etapa 3 permite crear y listar tickets mediante HTTP.
+Proyecto de aprendizaje: escribir solicitudes, analizarlas con IA y guardarlas en SQLite. La etapa 1 preparó Vue y `GET /health`; la etapa 2 agregó SQLite; la etapa 3 agregó los endpoints de tickets. La etapa 4 conecta el formulario y la lista de Vue con esa API mediante `fetch`.
 
 ## Carpetas y archivos
 
 - `frontend/`: proyecto del navegador. `package.json` declara dependencias y comandos; `package-lock.json` fija las versiones instaladas. `vite.config.ts` habilita Vue y `tsconfig.json` configura TypeScript.
-- `frontend/src/`: código de la interfaz. `main.ts` crea la aplicación Vue y la monta en el elemento `#app` de `index.html`. `App.vue` contiene la pantalla inicial.
+- `frontend/src/`: código de la interfaz. `main.ts` crea la aplicación Vue y la monta en el elemento `#app` de `index.html`. `App.vue` contiene el formulario, la lista y las llamadas `fetch`.
 - `frontend/node_modules/`: dependencias descargadas por npm; no se guarda en Git.
 - `frontend/dist/`: archivos generados por `npm.cmd run build`; tampoco se guardan en Git.
 - `backend/`: código Python. `main.py` define la API y los modelos Pydantic; `database.py` inicializa SQLite, guarda y lista tickets. `requirements.txt` declara FastAPI y uvicorn. `test_database.py` y `test_tickets.py` verifican la base y la validación con `unittest`, incluido en Python.
@@ -26,7 +26,7 @@ npm.cmd install
 npm.cmd run dev
 ```
 
-Abrí la dirección que imprime Vite, normalmente `http://localhost:5173`. Usamos `npm.cmd` para evitar el bloqueo de `npm.ps1` por la política de PowerShell.
+Abrí `http://localhost:5173`. Vite está configurado con ese host y puerto; si el puerto está ocupado, falla en lugar de cambiarlo. CORS permite exactamente ese origen. Usamos `npm.cmd` para evitar el bloqueo de `npm.ps1` por la política de PowerShell.
 
 **Terminal 2: backend**
 
@@ -314,6 +314,103 @@ Para repetir las pruebas automáticas, desde `backend/`:
 
 Se agregan solamente creación y listado por API, validación y SQL parametrizado. Gemini y la conexión del frontend siguen pendientes.
 
-**Pregunta conceptual:** ¿por qué enviamos la descripción aparte del SQL, en lugar de concatenarla dentro del `INSERT`?
+## Etapa 4: formulario Vue, fetch y CORS
+
+### Archivos y conceptos nuevos
+
+`frontend/src/App.vue` contiene la pantalla: un `textarea`, un botón para crear la solicitud y una lista. La interfaz muestra la descripción y el identificador; los campos de análisis siguen en `null` en la API.
+
+En `<script setup lang="ts">` escribimos la lógica del componente con TypeScript. `interface Ticket` describe los cinco campos que esperamos recibir, pero no valida por sí sola las respuestas durante la ejecución.
+
+`ref` crea un valor reactivo: cuando cambia, Vue actualiza la pantalla. En el código TypeScript usamos `description.value` o `tickets.value`; dentro del template Vue permite usar directamente `description` y `tickets`.
+
+`v-model="description"` mantiene sincronizado el texto del `textarea` con ese estado. `v-for` dibuja una fila por ticket, y `:key="ticket.id"` permite identificarla. `{{ ticket.description }}` muestra el texto escapado; no lo interpreta como HTML. Ver [formularios de Vue](https://vuejs.org/guide/essentials/forms.html).
+
+`onMounted(loadTickets)` carga la lista cuando el componente se monta. `@submit.prevent="createTicket"` maneja el envío del formulario sin que el navegador navegue a otra página.
+
+`frontend/vite.config.ts` fija `host: 'localhost'`, `port: 5173` y `strictPort: true`. Esto mantiene el origen de desarrollo alineado con la política CORS.
+
+### Flujo del dato, paso a paso
+
+1. Abrís `http://localhost:5173`. Vite entrega la página y los módulos de Vue; `main.ts` monta `App.vue` en `#app`.
+2. `onMounted` llama a `loadTickets()`. `fetch(ticketsUrl)` envía un `GET` a `http://127.0.0.1:8000/tickets`. `fetch` devuelve una promesa; `await` espera su resultado sin bloquear la página.
+3. Uvicorn recibe esa petición y FastAPI ejecuta la ruta GET. `database.list_tickets()` abre SQLite y consulta las filas con `SELECT ... ORDER BY id`.
+4. FastAPI transforma los diccionarios Python en un array JSON y lo devuelve con HTTP `200`. El middleware agrega el permiso CORS correspondiente al origen permitido.
+5. En Vue, `response.ok` comprueba que el estado HTTP esté entre 200 y 299. Es necesario porque `fetch` no rechaza automáticamente la promesa ante un estado como `422` o `500`. `await response.json()` lee el cuerpo y lo convierte en valores JavaScript. Luego `tickets.value` recibe la lista y Vue la muestra. Ver [Response.ok](https://developer.mozilla.org/en-US/docs/Web/API/Response/ok).
+6. Escribís la descripción. `v-model` actualiza `description`; al enviar el formulario, `createTicket()` quita los espacios de los extremos y activa `submitting`. Mientras se guarda, el botón y el campo quedan deshabilitados.
+7. El POST usa `JSON.stringify({ description: text })` para convertir el objeto JavaScript en texto JSON. El encabezado `Content-Type: application/json` indica el formato del cuerpo. El navegador hace primero una consulta CORS `OPTIONS`, explicada abajo.
+8. Uvicorn recibe el POST. FastAPI interpreta su JSON y Pydantic valida el campo. Si es inválido, responde `422` y no se ejecuta la inserción.
+9. Si es válido, `database.create_ticket()` ejecuta `INSERT INTO tickets (description) VALUES (?)` con el texto como parámetro. SQLite genera el identificador y deja los campos de análisis en `NULL`. `commit()` confirma la escritura en `backend/minidesk.db`; la conexión se cierra.
+10. FastAPI devuelve el ticket completo con HTTP `201`. Vue comprueba `response.ok`, interpreta el JSON y agrega ese ticket a `tickets.value`. Solo entonces limpia el campo. No necesita otro GET para mostrar esa nueva fila.
+11. Al recargar la página se repite el GET inicial: las solicitudes vuelven desde SQLite, porque ya no dependen del estado que estaba en memoria en Vue.
+
+Si falla la carga inicial, se muestra el error y se deshabilita la creación hasta recargar correctamente. Si falla un POST, se conserva la descripción. El mensaje pide recargar la lista antes de reintentar porque, ante una conexión interrumpida, podría haberse guardado el ticket sin que llegara la confirmación.
+
+### Qué hace CORS
+
+Un origen combina protocolo, host y puerto. `http://localhost:5173` y `http://127.0.0.1:8000` son orígenes distintos, aunque los dos estén en tu computadora.
+
+En `backend/main.py` agregamos:
+
+```python
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
+)
+```
+
+Un middleware procesa la petición y la respuesta alrededor de las rutas. Este comunica al navegador que el origen indicado puede leer las respuestas de la API. No usamos `*` ni habilitamos credenciales.
+
+Antes de un POST con `application/json`, el navegador consulta los permisos enviando `OPTIONS`, una petición previa llamada *preflight*. El middleware responde a esa consulta automáticamente; no hace falta crear otra ruta. Si el origen, método o encabezado solicitado no está permitido, el navegador no envía ese POST.
+
+`http://127.0.0.1:5173` y `http://localhost:5174` no están permitidos: usá exactamente `http://localhost:5173`. CORS es una regla aplicada por el navegador; no reemplaza la autenticación ni bloquea por sí sola a otros clientes HTTP. Ver la [guía CORS de FastAPI](https://fastapi.tiangolo.com/tutorial/cors/).
+
+### Ejecutar y comprobar manualmente
+
+En una terminal, desde la raíz del proyecto:
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
+```
+
+En otra terminal, también desde la raíz:
+
+```powershell
+cd frontend
+npm.cmd run dev
+```
+
+Si esos servidores ya están en ejecución, usá los existentes. Si empezaron antes de cambiar `vite.config.ts`, reiniciá Vite para que adopte el host y puerto fijados.
+
+1. Abrí `http://localhost:5173`. Debe aparecer la lista guardada o el mensaje de que todavía no hay solicitudes.
+2. Sin escribir nada, o escribiendo solo espacios, el botón debe estar deshabilitado.
+3. Escribí `No puedo imprimir desde mi computadora` y pulsá **Crear solicitud**. La fila debe aparecer y el campo debe quedar vacío cuando termine el guardado.
+4. Recargá la página: la solicitud debe seguir en la lista.
+5. En las herramientas del navegador, pestaña **Network / Red**, podés observar el GET inicial, el POST con su cuerpo JSON y la respuesta `201`. También puede aparecer `OPTIONS`; el navegador puede reutilizar permisos CORS previamente consultados.
+6. Para probar el error de carga, detené tu backend con `Ctrl+C` y recargá la página: debe mostrar el mensaje de error. Reiniciá el backend y recargá para recuperarte.
+7. Para probar el error al guardar, cargá la página con ambos servidores activos; luego detené el backend y enviá una descripción. Debe conservar el texto y mostrar el error. Al reiniciar, recargá la lista antes de volver a enviar.
+
+Las solicitudes que crees manualmente quedan en tu base local.
+
+### Verificaciones realizadas en la etapa 4
+
+- `npm.cmd run build`: pasó TypeScript y la compilación de Vite.
+- `python -m unittest discover -v`: seis pruebas pasaron, incluidas dos pruebas nuevas del middleware CORS real, sin dependencias de pruebas adicionales.
+- En el navegador se comprobó la carga de la lista, la creación mediante el formulario y la persistencia al recargar. El campo se vació después de guardar.
+- Se verificó que el botón está deshabilitado para texto compuesto solo por espacios.
+- Se simuló un fallo de red del POST únicamente en la pestaña de prueba: apareció el error y se conservó la descripción. Recargar la pestaña retiró esa simulación.
+- Las peticiones preflight reales permitieron `http://localhost:5173` con estado `200` y rechazaron `http://127.0.0.1:5173`, `http://localhost:5174` y `https://example.com` con `400`, sin permiso de origen.
+- Se comprobó una ventana de 375 píxeles sin desbordamiento horizontal.
+- Se retiró únicamente la fila creada para la prueba del navegador; las solicitudes previas se conservaron. Los servidores que ya estaban ejecutándose se dejaron activos.
+- La revisión del código no encontró problemas. La URL de la API está fija para esta configuración local.
+
+### Límite de esta etapa
+
+Solo agregamos el formulario, el listado conectado con `fetch` y CORS local. No se integró Gemini ni se agregaron dependencias.
+
+**Pregunta conceptual:** ¿por qué una solicitud sigue apareciendo al recargar la página, aunque el estado de Vue se haya reiniciado?
 
 La etapa termina acá. Una respuesta a la pregunta no inicia la siguiente; para eso tenés que escribir **CONTINUAR**.
