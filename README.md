@@ -4,6 +4,8 @@ MiniDesk AI es una aplicación pequeña para registrar solicitudes internas, ana
 
 El proyecto sirve para aprender a conectar un frontend Vue 3 con TypeScript y Vite, una API Python con FastAPI, una base SQLite mediante `sqlite3` y una API de inteligencia artificial.
 
+![Vista previa de MiniDesk AI](minideskai.png)
+
 ## Requisitos
 
 - Node.js compatible con Vite: 20.19+ o 22.12+.
